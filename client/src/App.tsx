@@ -11,6 +11,7 @@ function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [roomId, setRoomId] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isBroadcaster, setIsBroadcaster] = useState(false);
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -43,50 +44,100 @@ function App() {
   useEffect(() => {
     if (!socket) return;
 
+    socket.on('userJoined', async ({ userId }) => {
+      console.log('New user joined:', userId);
+      if (isBroadcaster && peerConnection.current && localStream.current) {
+        try {
+          const offer = await peerConnection.current.createOffer();
+          await peerConnection.current.setLocalDescription(offer);
+          socket.emit('streamOffer', {
+            offer,
+            roomId
+          });
+        } catch (error) {
+          console.error('Error creating offer for new user:', error);
+        }
+      }
+    });
+
     socket.on('streamOffer', async (data: { offer: RTCSessionDescriptionInit; from: string }) => {
-      if (!peerConnection.current) {
+      console.log('Received stream offer:', data);
+      try {
+        if (peerConnection.current) {
+          peerConnection.current.close();
+        }
+        
         const pc = new RTCPeerConnection({
           iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
         });
-        peerConnection.current = pc;
+        
+        pc.onicecandidate = (event) => {
+          if (event.candidate && socket) {
+            socket.emit('iceCandidate', {
+              candidate: event.candidate,
+              roomId,
+              to: data.from
+            });
+          }
+        };
 
         pc.ontrack = (event) => {
-          if (remoteVideoRef.current) {
+          console.log('Received remote track:', event);
+          if (remoteVideoRef.current && event.streams[0]) {
             remoteVideoRef.current.srcObject = event.streams[0];
           }
         };
+
+        peerConnection.current = pc;
+
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        socket.emit('streamAnswer', {
+          answer,
+          to: data.from,
+          roomId
+        });
+      } catch (error) {
+        console.error('Error handling offer:', error);
       }
-
-      const pc = peerConnection.current;
-      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-
-      socket.emit('streamAnswer', {
-        answer,
-        to: data.from,
-        roomId
-      });
     });
 
     socket.on('streamAnswer', async (data: { answer: RTCSessionDescriptionInit; from: string }) => {
-      if (peerConnection.current) {
-        await peerConnection.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+      console.log('Received stream answer:', data);
+      try {
+        if (peerConnection.current) {
+          await peerConnection.current.setRemoteDescription(
+            new RTCSessionDescription(data.answer)
+          );
+        }
+      } catch (error) {
+        console.error('Error setting remote description:', error);
       }
     });
 
     socket.on('iceCandidate', async (data: { candidate: RTCIceCandidateInit; from: string }) => {
-      if (peerConnection.current) {
-        await peerConnection.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+      console.log('Received ICE candidate:', data);
+      try {
+        if (peerConnection.current) {
+          await peerConnection.current.addIceCandidate(
+            new RTCIceCandidate(data.candidate)
+          );
+        }
+      } catch (error) {
+        console.error('Error adding ICE candidate:', error);
       }
     });
 
     return () => {
+      socket.off('userJoined');
       socket.off('streamOffer');
       socket.off('streamAnswer');
       socket.off('iceCandidate');
     };
-  }, [socket, roomId]);
+  }, [socket, roomId, isBroadcaster]);
 
   const startStream = async () => {
     try {
@@ -103,15 +154,35 @@ function App() {
       const pc = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
-      peerConnection.current = pc;
 
-      stream.getTracks().forEach((track: MediaStreamTrack) => {
+      pc.onicecandidate = (event) => {
+        if (event.candidate && socket) {
+          socket.emit('iceCandidate', {
+            candidate: event.candidate,
+            roomId,
+            to: roomId
+          });
+        }
+      };
+
+      stream.getTracks().forEach(track => {
         if (localStream.current) {
           pc.addTrack(track, localStream.current);
         }
       });
 
+      peerConnection.current = pc;
       setIsStreaming(true);
+      setIsBroadcaster(true);
+
+      if (roomId && socket) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('streamOffer', {
+          offer,
+          roomId
+        });
+      }
     } catch (error) {
       console.error('Error accessing media devices:', error);
     }
@@ -132,7 +203,7 @@ function App() {
     setIsStreaming(false);
   };
 
-  const joinRoom = () => {
+  const joinRoom = async () => {
     if (socket && roomId) {
       socket.emit('joinRoom', roomId);
     }
@@ -147,6 +218,7 @@ function App() {
       <header className="App-header">
         <h1>实时流媒体应用</h1>
         <p>连接状态: {isConnected ? '已连接' : '未连接'}</p>
+        <p>角色: {isBroadcaster ? '主播' : '观众'}</p>
       </header>
       
       <div className="controls">

@@ -9,11 +9,6 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 
-interface StreamData {
-  stream: any;
-  roomId?: string;
-}
-
 @WebSocketGateway({
   cors: {
     origin: true,
@@ -48,11 +43,21 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() roomId: string
   ) {
+    console.log(`Client ${client.id} joining room ${roomId}`);
+    
     if (!this.rooms.has(roomId)) {
       this.rooms.set(roomId, new Set());
     }
-    this.rooms.get(roomId)?.add(client.id);
+    
+    const roomClients = this.rooms.get(roomId);
+    roomClients?.add(client.id);
+    
     client.join(roomId);
+    
+    // 通知房间内其他人有新成员加入
+    client.to(roomId).emit('userJoined', { userId: client.id });
+    
+    console.log(`Room ${roomId} now has members:`, Array.from(roomClients || []));
     return { success: true, roomId };
   }
 
@@ -61,6 +66,7 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() roomId: string
   ) {
+    console.log(`Client ${client.id} leaving room ${roomId}`);
     this.rooms.get(roomId)?.delete(client.id);
     client.leave(roomId);
     return { success: true };
@@ -71,10 +77,21 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { offer: RTCSessionDescriptionInit; roomId: string }
   ) {
-    client.to(data.roomId).emit('streamOffer', {
-      offer: data.offer,
-      from: client.id
-    });
+    console.log(`Received stream offer from ${client.id} for room ${data.roomId}`);
+    
+    // 获取房间内的所有其他客户端
+    const roomClients = this.rooms.get(data.roomId);
+    if (roomClients) {
+      roomClients.forEach(clientId => {
+        if (clientId !== client.id) {
+          console.log(`Forwarding offer to client ${clientId}`);
+          this.server.to(clientId).emit('streamOffer', {
+            offer: data.offer,
+            from: client.id
+          });
+        }
+      });
+    }
   }
 
   @SubscribeMessage('streamAnswer')
@@ -82,7 +99,8 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { answer: RTCSessionDescriptionInit; roomId: string; to: string }
   ) {
-    client.to(data.to).emit('streamAnswer', {
+    console.log(`Received stream answer from ${client.id} to ${data.to}`);
+    this.server.to(data.to).emit('streamAnswer', {
       answer: data.answer,
       from: client.id
     });
@@ -93,9 +111,26 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { candidate: RTCIceCandidate; roomId: string; to: string }
   ) {
-    client.to(data.to).emit('iceCandidate', {
-      candidate: data.candidate,
-      from: client.id
-    });
+    console.log(`Received ICE candidate from ${client.id} to ${data.to}`);
+    if (data.to === data.roomId) {
+      // 如果目标是房间ID，则广播给房间内所有其他用户
+      const roomClients = this.rooms.get(data.roomId);
+      if (roomClients) {
+        roomClients.forEach(clientId => {
+          if (clientId !== client.id) {
+            this.server.to(clientId).emit('iceCandidate', {
+              candidate: data.candidate,
+              from: client.id
+            });
+          }
+        });
+      }
+    } else {
+      // 否则发送给特定用户
+      this.server.to(data.to).emit('iceCandidate', {
+        candidate: data.candidate,
+        from: client.id
+      });
+    }
   }
 } 
