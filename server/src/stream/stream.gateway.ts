@@ -75,22 +75,31 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('streamOffer')
   handleStreamOffer(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { offer: RTCSessionDescriptionInit; roomId: string }
+    @MessageBody() data: { offer: RTCSessionDescriptionInit; roomId: string; to?: string }
   ) {
     console.log(`Received stream offer from ${client.id} for room ${data.roomId}`);
     
-    // 获取房间内的所有其他客户端
-    const roomClients = this.rooms.get(data.roomId);
-    if (roomClients) {
-      roomClients.forEach(clientId => {
-        if (clientId !== client.id) {
-          console.log(`Forwarding offer to client ${clientId}`);
-          this.server.to(clientId).emit('streamOffer', {
-            offer: data.offer,
-            from: client.id
-          });
-        }
+    if (data.to) {
+      // 如果指定了特定目标，只发送给该目标
+      console.log(`Forwarding offer to specific client ${data.to}`);
+      this.server.to(data.to).emit('streamOffer', {
+        offer: data.offer,
+        from: client.id
       });
+    } else {
+      // 否则发送给房间内的所有其他客户端
+      const roomClients = this.rooms.get(data.roomId);
+      if (roomClients) {
+        roomClients.forEach(clientId => {
+          if (clientId !== client.id) {
+            console.log(`Forwarding offer to client ${clientId}`);
+            this.server.to(clientId).emit('streamOffer', {
+              offer: data.offer,
+              from: client.id
+            });
+          }
+        });
+      }
     }
   }
 
