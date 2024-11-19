@@ -20,7 +20,8 @@ function App() {
   const localStream = useRef<MediaStream | null>(null);
 
   useEffect(() => {
-    const wsUrl = process.env.REACT_APP_WS_URL || 'ws://localhost:3000';
+    const wsUrl = process.env.REACT_APP_WS_URL || `ws://${window.location.hostname}:3000`;
+    console.log('Connecting to WebSocket server:', wsUrl);
     const newSocket = io(wsUrl, {
       withCredentials: true,
     });
