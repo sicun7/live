@@ -70,11 +70,17 @@ function App() {
       console.log('Received stream offer from:', data.from);
       try {
         const pc = new RTCPeerConnection({
-          iceServers: [ {
-            urls: "turn:124.222.71.173:3478",
-            username: "admin",
-            credential: "123456",
-          },]
+          iceServers: [ 
+            {
+              urls: "turn:124.222.71.173:3478",
+              username: "admin",
+              credential: "123456"
+            },
+            {
+              urls: 'stun:124.222.71.173:3478'
+            }
+          ],
+          iceTransportPolicy: 'all'
         });
 
         pc.onicecandidate = (event) => {
