@@ -70,7 +70,11 @@ function App() {
       console.log('Received stream offer from:', data.from);
       try {
         const pc = new RTCPeerConnection({
-          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+          iceServers: [ {
+            urls: "turn:124.222.71.173:3478",
+            username: "admin",
+            credential: "123456",
+          },]
         });
 
         pc.onicecandidate = (event) => {
